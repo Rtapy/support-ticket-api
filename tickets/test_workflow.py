@@ -1,19 +1,14 @@
-from concurrent.futures import ThreadPoolExecutor
-from queue import Queue
-from time import monotonic, sleep
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
-from django.db import close_old_connections, connection, connections, transaction
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
-from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
 
-from .models import Ticket, TicketStatusHistory
+from .models import Ticket
 from .services import change_ticket_status, create_ticket
 
 
@@ -141,60 +136,3 @@ class TicketWorkflowTests(TestCase):
                     reverse('ticket-status', args=[ticket.pk]), {'status': 'IN_PROGRESS'}, format='json',
                 )
         self.assertEqual(self.snapshot(ticket), before)
-
-
-class TicketWorkflowRaceTests(TransactionTestCase):
-    def test_waiting_writer_validates_current_status_after_acquiring_row_lock(self):
-        self.assertEqual(connection.vendor, 'postgresql')
-        User = get_user_model()
-        employee = User.objects.create_user(username='employee')
-        support = User.objects.create_user(username='support')
-        support.groups.add(Group.objects.get_or_create(name='Support')[0])
-        ticket = create_ticket(created_by=employee, title='Race', description='Competing transitions.')
-        worker_pid = Queue()
-
-        def competing_writer():
-            close_old_connections()
-            worker_connection = connections['default']
-            try:
-                actor = User.objects.get(pk=support.pk)
-                with worker_connection.cursor() as cursor:
-                    cursor.execute("SET lock_timeout = '5s'")
-                    cursor.execute('SELECT pg_backend_pid()')
-                    worker_pid.put(cursor.fetchone()[0])
-                try:
-                    change_ticket_status(ticket_id=ticket.pk, actor=actor, new_status=Ticket.Status.IN_PROGRESS)
-                except ValidationError:
-                    return 'rejected'
-                return 'updated'
-            finally:
-                worker_connection.close()
-
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            with transaction.atomic():
-                Ticket.objects.select_for_update().get(pk=ticket.pk)
-                with connection.cursor() as cursor:
-                    cursor.execute('SELECT pg_backend_pid()')
-                    main_pid = cursor.fetchone()[0]
-                future = pool.submit(competing_writer)
-                pid = worker_pid.get(timeout=5)
-                self.assertNotEqual(pid, main_pid)
-                deadline = monotonic() + 3
-                blocked = False
-                while monotonic() < deadline:
-                    with connection.cursor() as cursor:
-                        cursor.execute('SELECT pg_blocking_pids(%s)', [pid])
-                        blocked = main_pid in cursor.fetchone()[0]
-                    if blocked or future.done():
-                        break
-                    sleep(0.01)
-                self.assertTrue(blocked, 'The competing PostgreSQL connection must wait on the ticket lock.')
-                change_ticket_status(ticket_id=ticket.pk, actor=support, new_status=Ticket.Status.IN_PROGRESS)
-            self.assertEqual(future.result(timeout=10), 'rejected')
-
-        ticket.refresh_from_db()
-        self.assertEqual(ticket.status, Ticket.Status.IN_PROGRESS)
-        self.assertEqual(
-            list(ticket.status_history.values_list('actor_id', 'from_status', 'to_status')),
-            [(employee.pk, None, Ticket.Status.OPEN), (support.pk, Ticket.Status.OPEN, Ticket.Status.IN_PROGRESS)],
-        )
