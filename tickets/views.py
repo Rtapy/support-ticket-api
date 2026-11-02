@@ -3,12 +3,13 @@ from collections.abc import Mapping
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.fields import empty
 from rest_framework.response import Response
 
 from .models import Ticket
 from .roles import is_support_or_admin
 from .serializers import TicketSerializer, TicketStatusHistorySerializer
-from .services import change_ticket_status, close_ticket, reopen_ticket
+from .services import assign_ticket, change_ticket_status, close_ticket, reopen_ticket
 
 
 class TicketViewSet(
@@ -53,4 +54,11 @@ class TicketViewSet(
     @action(detail=True, methods=['post'])
     def reopen(self, request, pk=None):
         ticket = reopen_ticket(ticket_id=pk, actor=request.user)
+        return Response(self.get_serializer(ticket).data)
+
+    @action(detail=True, methods=['post'])
+    def assign(self, request, pk=None):
+        data = request.data
+        assignee_id = data.get('assignee_id', empty) if isinstance(data, Mapping) else empty
+        ticket = assign_ticket(ticket_id=pk, actor=request.user, assignee_id=assignee_id)
         return Response(self.get_serializer(ticket).data)

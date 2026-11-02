@@ -1,9 +1,11 @@
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from rest_framework.fields import IntegerField, empty
 from rest_framework.generics import get_object_or_404
 
 from .models import Ticket, TicketStatusHistory
-from .roles import is_support_or_admin
+from .roles import is_support, is_support_or_admin
 
 
 NORMAL_TRANSITIONS = {
@@ -78,3 +80,20 @@ def reopen_ticket(*, ticket_id, actor):
     if ticket.status not in (Ticket.Status.RESOLVED, Ticket.Status.CLOSED):
         raise ValidationError({'status': 'Only a resolved or closed ticket can be reopened.'})
     return _record_status_change(ticket=ticket, actor=actor, new_status=Ticket.Status.OPEN)
+
+
+@transaction.atomic
+def assign_ticket(*, ticket_id, actor, assignee_id=empty):
+    ticket = _get_locked_ticket(ticket_id=ticket_id, actor=actor, support_only=True)
+    try:
+        assignee_id = IntegerField(min_value=1, allow_null=True).run_validation(assignee_id)
+    except ValidationError as exc:
+        raise ValidationError({'assignee_id': exc.detail}) from exc
+    if assignee_id is not None:
+        assignee = get_user_model().objects.filter(pk=assignee_id).first()
+        if assignee is None or not is_support(assignee):
+            raise ValidationError({'assignee_id': 'Select an active member of Support.'})
+    if ticket.assigned_to_id != assignee_id:
+        ticket.assigned_to_id = assignee_id
+        ticket.save(update_fields=['assigned_to', 'updated_at'])
+    return ticket
