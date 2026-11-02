@@ -1,0 +1,58 @@
+# Local AI assistant instructions (do not commit)
+/AGENTS.md
+/agent.md
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+
+# Test, coverage, and type-check caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+
+# Django local/generated files
+*.log
+local_settings.py
+media/
+staticfiles/
+
+# Local development data (PostgreSQL is the project database)
+*.sqlite3
+*.sqlite3-journal
+pgdata/
+postgres_data/
+
+# IDE/editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.obsidian/
+
+# OS
+.DS_Store
+Thumbs.db
