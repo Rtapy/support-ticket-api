@@ -8,8 +8,8 @@ from rest_framework.response import Response
 
 from .models import Ticket
 from .roles import is_support_or_admin
-from .serializers import TicketSerializer, TicketStatusHistorySerializer
-from .services import assign_ticket, change_ticket_status, close_ticket, reopen_ticket
+from .serializers import TicketMessageSerializer, TicketSerializer, TicketStatusHistorySerializer
+from .services import assign_ticket, change_ticket_status, close_ticket, post_message, reopen_ticket
 
 
 class TicketViewSet(
@@ -62,3 +62,15 @@ class TicketViewSet(
         assignee_id = data.get('assignee_id', empty) if isinstance(data, Mapping) else empty
         ticket = assign_ticket(ticket_id=pk, actor=request.user, assignee_id=assignee_id)
         return Response(self.get_serializer(ticket).data)
+
+    @action(detail=True, methods=['get', 'post'], serializer_class=TicketMessageSerializer)
+    def messages(self, request, pk=None):
+        if request.method in ('GET', 'HEAD'):
+            ticket = self.get_object()
+            messages = ticket.messages.order_by('created_at', 'pk')
+            return Response(self.get_serializer(messages, many=True).data)
+        data = request.data
+        content = data.get('content', empty) if isinstance(data, Mapping) else empty
+        new_status = data.get('new_status', empty) if isinstance(data, Mapping) else empty
+        message = post_message(ticket_id=pk, actor=request.user, content=content, new_status=new_status)
+        return Response(self.get_serializer(message).data, status=201)

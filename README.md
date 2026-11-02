@@ -1,8 +1,8 @@
 # Support Ticket API
 
-Django/DRF backend for a support ticket system. The project foundation and ticket
-models, role helpers, read-only ticket Admin and ticket creation/read/history/status/
-assignment API are implemented. Message operations are a subsequent task.
+Django/DRF backend for a support ticket system. The API supports ticket creation,
+role-scoped reads, history, messages, assignment and status workflow. User/group
+management uses Django Admin; ticket Admin screens are read-only.
 Requirements and business decisions live in
 [the definition](docs/SUPPORT_TICKET_DISCOVERY_DEFINE.md) and
 [DECISIONS.md](docs/DECISIONS.md).
@@ -60,13 +60,15 @@ The test runner uses the same PostgreSQL server and creates
 `test_<POSTGRES_DB>`. The database role must be allowed to create databases.
 The local Compose database role has that permission. Focused tests cover model
 preservation, roles, token authentication, read-only ticket Admin, ticket API access
-and atomic ticket creation, status workflow, assignment and PostgreSQL row-lock concurrency.
+and atomic ticket creation, status workflow, assignment, replies with status changes
+and PostgreSQL row-lock concurrency.
 To run only the tests for a specific API task:
 
 ```bash
 python manage.py test tickets.test_api
 python manage.py test tickets.test_workflow
 python manage.py test tickets.test_assignment
+python manage.py test tickets.test_messages
 ```
 
 ## Data preservation
@@ -91,6 +93,11 @@ history-write failures roll back all changes.
 Assignment also locks the ticket row before checking access and the target user.
 It changes only the assignee and update timestamp, without changing status or
 adding status history. A failure rolls back the assignment and timestamp.
+
+Posting a message locks the ticket and validates access, closed state and any
+requested status transition before saving. Message, optional status/history and
+ticket update timestamp share one transaction. A rejected request has no side
+effects; a write failure rolls back the whole reply operation.
 
 Logically deleted tickets and their history remain visible under the same access
 rules: owners see their own records and Support/Admin see all records. API responses
@@ -147,6 +154,7 @@ All routes require a token. User references are represented as numeric IDs.
 | POST | `/api/tickets/{id}/close/` | Owner or Support/Admin: close a resolved ticket |
 | POST | `/api/tickets/{id}/reopen/` | Support/Admin: reopen a resolved/closed ticket |
 | POST | `/api/tickets/{id}/assign/` | Support/Admin: assign to active Support or unassign |
+| GET, POST | `/api/tickets/{id}/messages/` | List messages / reply, optionally with a Support/Admin status change |
 
 List responses are unpaginated arrays ordered by creation time descending, then ID
 descending. `?status=OPEN` (or `IN_PROGRESS`, `RESOLVED`, `CLOSED`) filters within
@@ -182,6 +190,25 @@ Support member; Admin has the same assignment permissions. Invalid/missing IDs a
 ineligible users return `400` without side effects. Employees receive `403` on their
 own tickets and `404` on others' tickets. A valid request returns `200` with the full
 ticket. Repeating the current assignment is accepted without changing the timestamp.
+
+Message lists are unpaginated arrays ordered by `created_at`, then ID. Any user
+allowed to read the ticket can read its messages, including when it is closed.
+Responses contain `id`, `ticket`, `author`, `content`, `created_at`, `updated_at`,
+`is_deleted` and `deleted_at`; retained messages are not filtered out by deletion flags.
+
+Post `{"content":"Reply text"}` to add a message. Support/Admin may include
+`"new_status":"RESOLVED"` using the same normal transition rules as the status
+action. Supplying `new_status` as an Employee returns `403`; invalid or unchanged
+transitions return `400` without saving a message. `new_status` is optional but
+cannot be null. Content is required and cannot be blank. Message author, ticket,
+IDs, timestamps and deletion fields are controlled by the server; submitted values
+are ignored. Success returns `201` with the created message. Read the ticket or its
+history to retrieve the resulting status. Plain replies update the ticket timestamp
+without adding a status-history event.
+
+Closed tickets reject messages (`400`) from every role until the dedicated Reopen
+action is used; a reply cannot reopen them. Employees can post only on their own
+nonclosed tickets, while Support/Admin can post on all nonclosed tickets.
 
 With the server running, replace the token placeholders and use the ID returned
 by creation for the detail/history examples:
@@ -221,15 +248,22 @@ curl -X POST "$API_BASE/tickets/$TICKET_ID/assign/" \
 curl -X POST "$API_BASE/tickets/$TICKET_ID/assign/" \
   -H "Authorization: Token $ADMIN_TOKEN" \
   -H 'Content-Type: application/json' -d '{"assignee_id":null}'
+
+curl -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/$TICKET_ID/messages/"
+curl -X POST "$API_BASE/tickets/$TICKET_ID/messages/" \
+  -H "Authorization: Token $EMPLOYEE_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"content":"Additional details"}'
+curl -X POST "$API_BASE/tickets/$TICKET_ID/messages/" \
+  -H "Authorization: Token $SUPPORT_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"content":"Access restored","new_status":"RESOLVED"}'
 ```
 
 ## Django Admin
 
 User and group management use the built-in Django Admin. Ticket, message and
 status-history screens are read-only, including for superusers: add, change,
-delete and bulk actions are disabled. Ticket creation, status and assignment changes
-use transactional service/API paths. Future message mutations will also use
-services/API instead of editable Admin forms.
+delete and bulk actions are disabled. Ticket creation, status, assignment and
+message mutations use transactional service/API paths instead of editable Admin forms.
 
 Viewing ticket records in Admin requires both the Support/Admin role and Django's
 normal model view/change permissions. Django Admin also requires an active staff

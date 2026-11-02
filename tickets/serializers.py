@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Ticket, TicketStatusHistory
+from .models import Ticket, TicketMessage, TicketStatusHistory
 from .services import create_ticket
 
 
@@ -24,4 +24,11 @@ class TicketStatusHistorySerializer(serializers.ModelSerializer):
     class Meta:
         model = TicketStatusHistory
         fields = ('id', 'ticket', 'actor', 'from_status', 'to_status', 'changed_at')
+        read_only_fields = fields
+
+
+class TicketMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TicketMessage
+        fields = ('id', 'ticket', 'author', 'content', 'created_at', 'updated_at', 'is_deleted', 'deleted_at')
         read_only_fields = fields
