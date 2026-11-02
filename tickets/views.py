@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -6,6 +8,7 @@ from rest_framework.response import Response
 from .models import Ticket
 from .roles import is_support_or_admin
 from .serializers import TicketSerializer, TicketStatusHistorySerializer
+from .services import change_ticket_status, close_ticket, reopen_ticket
 
 
 class TicketViewSet(
@@ -34,3 +37,20 @@ class TicketViewSet(
         ticket = self.get_object()
         history = ticket.status_history.order_by('changed_at', 'pk')
         return Response(TicketStatusHistorySerializer(history, many=True).data)
+
+    @action(detail=True, methods=['post'])
+    def status(self, request, pk=None):
+        data = request.data
+        new_status = data.get('status') if isinstance(data, Mapping) else None
+        ticket = change_ticket_status(ticket_id=pk, actor=request.user, new_status=new_status)
+        return Response(self.get_serializer(ticket).data)
+
+    @action(detail=True, methods=['post'])
+    def close(self, request, pk=None):
+        ticket = close_ticket(ticket_id=pk, actor=request.user)
+        return Response(self.get_serializer(ticket).data)
+
+    @action(detail=True, methods=['post'])
+    def reopen(self, request, pk=None):
+        ticket = reopen_ticket(ticket_id=pk, actor=request.user)
+        return Response(self.get_serializer(ticket).data)

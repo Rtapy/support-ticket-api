@@ -1,8 +1,8 @@
 # Support Ticket API
 
 Django/DRF backend for a support ticket system. The project foundation and ticket
-models, role helpers, read-only ticket Admin and ticket creation/read/history API
-are implemented. Status, assignment and message operations are subsequent tasks.
+models, role helpers, read-only ticket Admin and ticket creation/read/history/status
+API are implemented. Assignment and message operations are subsequent tasks.
 Requirements and business decisions live in
 [the definition](docs/SUPPORT_TICKET_DISCOVERY_DEFINE.md) and
 [DECISIONS.md](docs/DECISIONS.md).
@@ -60,10 +60,12 @@ The test runner uses the same PostgreSQL server and creates
 `test_<POSTGRES_DB>`. The database role must be allowed to create databases.
 The local Compose database role has that permission. Focused tests cover model
 preservation, roles, token authentication, read-only ticket Admin, ticket API access
-and atomic ticket creation. To run only the creation/read API tests:
+and atomic ticket creation, status workflow and PostgreSQL row-lock concurrency.
+To run only the tests for a specific API task:
 
 ```bash
 python manage.py test tickets.test_api
+python manage.py test tickets.test_workflow
 ```
 
 ## Data preservation
@@ -80,7 +82,10 @@ ORM protections, not database triggers or restrictions on direct SQL access.
 
 The creation service and ticket POST endpoint atomically save the ticket and its
 initial `NULL → OPEN` history event. Creating a `Ticket` directly through the ORM
-does not automatically create history. Status-change services are subsequent tasks.
+does not automatically create history. Status, close and reopen services lock the
+ticket row inside a transaction and check current ownership, role and workflow
+after acquiring the lock. Status, update timestamp and history commit together;
+history-write failures roll back all changes.
 
 Logically deleted tickets and their history remain visible under the same access
 rules: owners see their own records and Support/Admin see all records. API responses
@@ -133,6 +138,9 @@ All routes require a token. User references are represented as numeric IDs.
 | POST | `/api/tickets/` | Create for the authenticated user, with initial history |
 | GET | `/api/tickets/{id}/` | Detail under the same ownership/role rules |
 | GET | `/api/tickets/{id}/history/` | History ordered by `changed_at`, then ID |
+| POST | `/api/tickets/{id}/status/` | Support/Admin: normal status transition |
+| POST | `/api/tickets/{id}/close/` | Owner or Support/Admin: close a resolved ticket |
+| POST | `/api/tickets/{id}/reopen/` | Support/Admin: reopen a resolved/closed ticket |
 
 List responses are unpaginated arrays ordered by creation time descending, then ID
 descending. `?status=OPEN` (or `IN_PROGRESS`, `RESOLVED`, `CLOSED`) filters within
@@ -149,6 +157,17 @@ history write rolls back ticket creation.
 Responses contain `id`, `title`, `description`, `priority`, `status`, `created_by`,
 `assigned_to`, `created_at`, `updated_at`, `is_deleted` and `deleted_at`. History
 events contain `id`, `ticket`, `actor`, `from_status`, `to_status` and `changed_at`.
+
+The status action accepts `{"status":"IN_PROGRESS"}`. Normal transitions are
+`OPEN → IN_PROGRESS | RESOLVED`, `IN_PROGRESS → RESOLVED` and
+`RESOLVED → CLOSED`. Returning to `OPEN` requires the dedicated Reopen action.
+Close and Reopen need no body and always target `CLOSED` and `OPEN` respectively.
+Successful mutations return `200` with the full updated ticket. Invalid or
+unchanged transitions return `400` without changing timestamps or history.
+An Employee can close their own resolved ticket through Close, but cannot use
+the normal status or Reopen actions (`403` on visible tickets). Requests targeting
+another Employee's ticket return `404`. Every real transition appends exactly one
+event with the authenticated actor and previous/new status.
 
 With the server running, replace the token placeholders and use the ID returned
 by creation for the detail/history examples:
@@ -171,15 +190,24 @@ curl -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/$TICKET_ID/"
 curl -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/$TICKET_ID/history/"
 curl -H "Authorization: Token $SUPPORT_TOKEN" "$API_BASE/tickets/"
 curl -H "Authorization: Token $ADMIN_TOKEN" "$API_BASE/tickets/"
+
+curl -X POST "$API_BASE/tickets/$TICKET_ID/status/" \
+  -H "Authorization: Token $SUPPORT_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"status":"IN_PROGRESS"}'
+curl -X POST "$API_BASE/tickets/$TICKET_ID/status/" \
+  -H "Authorization: Token $SUPPORT_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"status":"RESOLVED"}'
+curl -X POST -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/$TICKET_ID/close/"
+curl -X POST -H "Authorization: Token $SUPPORT_TOKEN" "$API_BASE/tickets/$TICKET_ID/reopen/"
 ```
 
 ## Django Admin
 
 User and group management use the built-in Django Admin. Ticket, message and
 status-history screens are read-only, including for superusers: add, change,
-delete and bulk actions are disabled. Ticket creation uses the transactional
-service/API path. Other ticket mutations will also use services/API instead of editable
-Admin forms.
+delete and bulk actions are disabled. Ticket creation and status changes use the
+transactional service/API paths. Future assignment and message mutations will also
+use services/API instead of editable Admin forms.
 
 Viewing ticket records in Admin requires both the Support/Admin role and Django's
 normal model view/change permissions. Django Admin also requires an active staff
