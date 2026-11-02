@@ -9,12 +9,17 @@ Requirements and business decisions live in
 
 ## Local setup
 
-Requires Python 3.12+, Docker with Compose, and an available local port (default
-`55439`). PostgreSQL is required for both development and tests; there is no
+Verified with Python 3.12.3, Django 5.2.18, DRF 3.18.3, Psycopg 3.3.6 and
+PostgreSQL 16.15. Use Python 3.12, Docker with Compose, and an available local
+database port (default `55439`). API examples also use `curl`.
+PostgreSQL is required for both development and tests; there is no
 SQLite fallback. Compose runs only the local database. An existing PostgreSQL
 16+ instance can also be used by setting the `POSTGRES_*` variables accordingly.
+Skip Compose commands if using an existing server.
 
 ```bash
+git clone --branch develop https://github.com/Rtapy/support-ticket-api.git
+cd support-ticket-api
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -45,6 +50,21 @@ python manage.py runserver
 `DJANGO_DEBUG` defaults to `False`; the example enables it for local development.
 `DJANGO_ALLOWED_HOSTS` is a comma-separated list. Database name, user, password,
 host, port and Django secret key must be provided explicitly.
+
+| Variable | Purpose / local value |
+| --- | --- |
+| `DJANGO_SECRET_KEY` | Required secret; generate above and quote in `.env` |
+| `DJANGO_DEBUG` | Defaults to `False`; `.env.example` enables local debugging |
+| `DJANGO_ALLOWED_HOSTS` | Comma-separated; defaults to `localhost,127.0.0.1` |
+| `POSTGRES_DB` | Required database name; example `support_ticket_api` |
+| `POSTGRES_USER` | Required database role; example `support_ticket_api` |
+| `POSTGRES_PASSWORD` | Required database password; fill the blank placeholder |
+| `POSTGRES_HOST` | Required; `127.0.0.1` for the local Compose database |
+| `POSTGRES_PORT` | Required; `55439` in the example; change if occupied |
+
+Compose initializes the database/role/password when its data volume is first
+created. Editing credentials in `.env` does not change an existing PostgreSQL
+role or database; use the matching existing credentials or a separate fresh setup.
 
 ## Checks and tests
 
@@ -132,12 +152,16 @@ Roles are determined as follows:
 - Other active users are Employees; `is_staff` alone does not grant Support access.
 - Inactive and anonymous users do not receive Support/Admin privileges.
 
-For example, create users named `employee` and `support` in Admin, and add only
-`support` to the `Support` group. Generate their tokens using DRF's built-in command:
+For example, create users named `employee`, `other_employee` and `support` in Admin,
+and add only `support` to the `Support` group. All three should be active. They do
+not need staff status to use the API. Generate tokens using DRF's built-in command
+(replace `your_admin_username` with the superuser created above):
 
 ```bash
 python manage.py drf_create_token employee
+python manage.py drf_create_token other_employee
 python manage.py drf_create_token support
+python manage.py drf_create_token your_admin_username
 ```
 
 The command prints each user's token. User/group management follows the built-in
@@ -224,6 +248,7 @@ API_BASE=http://127.0.0.1:8000/api
 EMPLOYEE_TOKEN='<employee-token>'
 SUPPORT_TOKEN='<support-token>'
 ADMIN_TOKEN='<superuser-token>'
+OTHER_EMPLOYEE_TOKEN='<other-employee-token>'
 
 curl -i -X POST "$API_BASE/tickets/" \
   -H "Authorization: Token $EMPLOYEE_TOKEN" \
@@ -264,6 +289,22 @@ curl -X POST "$API_BASE/tickets/$TICKET_ID/messages/" \
   -H 'Content-Type: application/json' -d '{"content":"Access restored","new_status":"RESOLVED"}'
 ```
 
+To check role isolation, create a second ticket using `OTHER_EMPLOYEE_TOKEN`, note
+its returned ID as `OTHER_TICKET_ID`, then run the following. The first request
+returns `403`, the second returns `404`, and the last returns `401`:
+
+```bash
+curl -i -X POST "$API_BASE/tickets/" \
+  -H "Authorization: Token $OTHER_EMPLOYEE_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"title":"Another account","description":"Other employee request"}'
+OTHER_TICKET_ID=2 # Replace with the other employee's ticket ID.
+curl -i -X POST "$API_BASE/tickets/$TICKET_ID/status/" \
+  -H "Authorization: Token $EMPLOYEE_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"status":"CLOSED"}'
+curl -i -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/$OTHER_TICKET_ID/"
+curl -i "$API_BASE/tickets/"
+```
+
 ## Django Admin
 
 User and group management use the built-in Django Admin. Ticket, message and
@@ -285,3 +326,15 @@ docker compose stop db
 ```
 
 The database persists in a Docker volume across container restarts.
+
+## Delivery evidence and optional work
+
+The [delivery verification](docs/DELIVERY_VERIFICATION.md) records the fresh setup,
+full PostgreSQL test run, real local HTTP checks and requirement-to-test mapping.
+It distinguishes automated test-client checks, real database races and HTTP checks.
+
+Optional assignment features are not implemented: pagination, title/ID search,
+advanced filters and Swagger/OpenAPI. The ticket list supports only the documented
+status filter. These features require a separate agreed task after review of the
+required delivery. Frontend, deployment, notifications, attachments, SLA and advanced
+reporting remain outside the agreed backend scope.
