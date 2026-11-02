@@ -1,6 +1,6 @@
 # Support Ticket System — Backend Define
 
-**Scope:** Backend REST API only. Source: one-page technical assignment. Implementation choices are recorded in [DECISIONS.md](DECISIONS.md).
+**Scope:** Backend REST API only. 
 
 ## Requirements
 
