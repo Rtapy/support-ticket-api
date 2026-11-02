@@ -49,6 +49,13 @@ All paths require authentication; base prefix: `/api/`.
 | `POST` | `tickets/{id}/reopen/` | Reopen to `OPEN` |
 | `GET` | `tickets/{id}/history/` | Chronological status history |
 
+The three GET lists (tickets, messages and history) use cursor pagination with a
+fixed page size of 20. Their response envelope is `next`, `previous`, `results`;
+links are nullable and contain an opaque `cursor` query parameter. Ticket order is
+newest first (`created_at`, then ID descending); messages/history remain chronological
+(`created_at`/`changed_at`, then ID ascending). Ownership and status filtering apply
+before pagination. Detail and mutation response shapes are unchanged.
+
 Do not expose generic `PUT/PATCH/DELETE` or custom user-management REST routes. An employee requesting another employee's ticket by ID receives `404`; an authenticated user attempting a forbidden operation on a visible ticket receives `403`.
 
 Logically deleted tickets remain visible under the same ownership/role rules, including their history. Ticket responses include `is_deleted` and `deleted_at`; clients decide how to display them.
@@ -79,4 +86,4 @@ Write only focused tests that prove these essential behaviors (avoid exhaustive/
 - Root `README.md`: setup, environment, migration/run/test commands, endpoint list, authentication and role-testing examples.
 - `docs/DECISIONS.md`: important architectural/product assumptions and limitations.
 
-**Out of scope:** frontend, deployments, notifications, attachments, SLA, advanced reporting, pagination, advanced filters/search and Swagger/OpenAPI unless separately approved.
+**Out of scope:** frontend, deployments, notifications, attachments, SLA, advanced reporting, advanced filters/search and Swagger/OpenAPI unless separately approved. Cursor pagination is the separately approved optional feature implemented for the three GET lists.

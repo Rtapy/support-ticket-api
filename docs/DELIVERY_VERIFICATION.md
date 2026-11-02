@@ -4,6 +4,10 @@ Date: 2026-11-02. Application baseline: `5132aab` (merged task 8).
 Task 9 changes documentation only. The required implementation is ready for user
 review; this report does not substitute for PR approval or merge.
 
+This is the historical verification before optional cursor pagination. The current
+list response contract is documented in [README.md](../README.md); the 37-test and
+33-request results below apply to the baseline above, not to the pagination change.
+
 ## Environment and clean setup
 
 Verification used an archive of the tracked baseline in a temporary directory,

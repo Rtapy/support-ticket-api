@@ -61,13 +61,13 @@ class TicketMessageTests(TestCase):
         for user in (self.employee, self.support, self.administrator):
             response = self.client_for(user).get(own_url)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual([message['id'] for message in response.data], [self.message.pk])
-            self.assertTrue(response.data[0]['is_deleted'])
-            self.assertIsNotNone(response.data[0]['deleted_at'])
+            self.assertEqual([message['id'] for message in response.data['results']], [self.message.pk])
+            self.assertTrue(response.data['results'][0]['is_deleted'])
+            self.assertIsNotNone(response.data['results'][0]['deleted_at'])
         for user in (self.support, self.administrator):
             response = self.client_for(user).get(other_url)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual([message['id'] for message in response.data], [self.other_message.pk])
+            self.assertEqual([message['id'] for message in response.data['results']], [self.other_message.pk])
         response = self.client_for(self.support).generic(
             'HEAD', own_url, data='{"content":"Unexpected write","new_status":"RESOLVED"}',
             content_type='application/json',
@@ -109,7 +109,7 @@ class TicketMessageTests(TestCase):
                     {field: value for field, value in before_ticket.items() if field != 'updated_at'},
                 )
         response = self.client_for(self.employee).get(reverse('ticket-messages', args=[self.ticket.pk]))
-        self.assertEqual([message['id'] for message in response.data], expected_ids)
+        self.assertEqual([message['id'] for message in response.data['results']], expected_ids)
 
     def test_reply_and_status_change_commit_with_exact_history(self):
         previous = Ticket.Status.OPEN

@@ -90,6 +90,7 @@ python manage.py test tickets.test_workflow
 python manage.py test tickets.test_assignment
 python manage.py test tickets.test_messages
 python manage.py test tickets.test_concurrency
+python manage.py test tickets.test_pagination
 ```
 
 The five concurrency tests use `TransactionTestCase` and independent PostgreSQL
@@ -186,11 +187,26 @@ All routes require a token. User references are represented as numeric IDs.
 | POST | `/api/tickets/{id}/assign/` | Support/Admin: assign to active Support or unassign |
 | GET, POST | `/api/tickets/{id}/messages/` | List messages / reply, optionally with a Support/Admin status change |
 
-List responses are unpaginated arrays ordered by creation time descending, then ID
-descending. `?status=OPEN` (or `IN_PROGRESS`, `RESOLVED`, `CLOSED`) filters within
+Ticket pages are ordered by creation time descending, then ID descending.
+`?status=OPEN` (or `IN_PROGRESS`, `RESOLVED`, `CLOSED`) filters within
 the visible records. An invalid status returns `400`. An Employee requesting
 another user's detail or history receives `404`, including for logically deleted
 tickets. Generic `PUT/PATCH/DELETE` are unavailable.
+
+The three GET lists (tickets, messages and history) use DRF CursorPagination with
+a fixed page size of 20. List responses contain `next`, `previous` and `results`;
+this replaces the previous bare-array contract. An empty list looks like:
+
+```json
+{"next": null, "previous": null, "results": []}
+```
+
+For nonempty pages, `results` holds up to 20 ticket/message/history objects.
+Follow the returned `next` or `previous` URL unchanged; these links carry an opaque
+`cursor` and preserve query parameters such as the ticket status filter. A null
+link means that direction has no further page. There is no total count, page-number
+parameter or client-controlled page size. Each request still enforces ownership
+and role visibility. Detail and POST responses retain their existing shape.
 
 Creation accepts `title` (required, up to 255 characters), `description` (required)
 and `priority` (`LOW`, `MEDIUM`, `HIGH`; default `MEDIUM`). Server-controlled fields
@@ -221,7 +237,7 @@ ineligible users return `400` without side effects. Employees receive `403` on t
 own tickets and `404` on others' tickets. A valid request returns `200` with the full
 ticket. Repeating the current assignment is accepted without changing the timestamp.
 
-Message lists are unpaginated arrays ordered by `created_at`, then ID. Any user
+Message pages are ordered by `created_at`, then ID. Any user
 allowed to read the ticket can read its messages, including when it is closed.
 Responses contain `id`, `ticket`, `author`, `content`, `created_at`, `updated_at`,
 `is_deleted` and `deleted_at`; retained messages are not filtered out by deletion flags.
@@ -329,12 +345,17 @@ The database persists in a Docker volume across container restarts.
 
 ## Delivery evidence and optional work
 
-The [delivery verification](docs/DELIVERY_VERIFICATION.md) records the fresh setup,
-full PostgreSQL test run, real local HTTP checks and requirement-to-test mapping.
-It distinguishes automated test-client checks, real database races and HTTP checks.
+The [delivery verification](docs/DELIVERY_VERIFICATION.md) records the required
+delivery before optional pagination: fresh setup, full PostgreSQL test run, real
+local HTTP checks and requirement-to-test mapping. It distinguishes automated
+test-client checks, real database races and HTTP checks.
 
-Optional assignment features are not implemented: pagination, title/ID search,
-advanced filters and Swagger/OpenAPI. The ticket list supports only the documented
-status filter. These features require a separate agreed task after review of the
-required delivery. Frontend, deployment, notifications, attachments, SLA and advanced
-reporting remain outside the agreed backend scope.
+Cursor pagination is now implemented for all three GET lists. The pagination change
+was verified with `tickets.test_pagination`, `tickets.test_api` and
+`tickets.test_messages`: 18 tests passed on PostgreSQL. It does not claim a new
+full-suite or live-HTTP run for the changed response contract.
+
+Other optional assignment features are not implemented: title/ID search, advanced
+filters and Swagger/OpenAPI. The ticket list supports only the documented status
+filter. These features require a separate agreed task. Frontend, deployment,
+notifications, attachments, SLA and advanced reporting remain outside scope.
