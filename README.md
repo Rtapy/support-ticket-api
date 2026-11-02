@@ -69,7 +69,13 @@ python manage.py test tickets.test_api
 python manage.py test tickets.test_workflow
 python manage.py test tickets.test_assignment
 python manage.py test tickets.test_messages
+python manage.py test tickets.test_concurrency
 ```
+
+The five concurrency tests use `TransactionTestCase` and independent PostgreSQL
+connections. They observe the waiting `SELECT ... FOR UPDATE` in PostgreSQL before
+allowing the first writer to commit; no lock behavior is mocked. See the
+[write/concurrency audit](docs/WRITE_CONCURRENCY_AUDIT.md) for scenarios and scope.
 
 ## Data preservation
 
