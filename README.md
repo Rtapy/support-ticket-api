@@ -1,21 +1,11 @@
 # Support Ticket API
 
-Django/DRF backend for a support ticket system. The API supports ticket creation,
-role-scoped reads, history, messages, assignment and status workflow. User/group
-management uses Django Admin; ticket Admin screens are read-only.
-Requirements and business decisions live in
-[the definition](docs/SUPPORT_TICKET_DISCOVERY_DEFINE.md) and
-[DECISIONS.md](docs/DECISIONS.md).
+Django/DRF + PostgreSQL backend for tickets, messages, assignment and status history.
+Interactive API documentation: **[Swagger UI](http://127.0.0.1:8000/api/docs/)**.
 
-## Local setup
+## Run locally
 
-Verified with Python 3.12.3, Django 5.2.18, DRF 3.18.3, Psycopg 3.3.6 and
-PostgreSQL 16.15. Use Python 3.12, Docker with Compose, and an available local
-database port (default `55439`). API examples also use `curl`.
-PostgreSQL is required for both development and tests; there is no
-SQLite fallback. Compose runs only the local database. An existing PostgreSQL
-16+ instance can also be used by setting the `POSTGRES_*` variables accordingly.
-Skip Compose commands if using an existing server.
+Use Python 3.12 and Docker Compose. PostgreSQL is mandatory for development/tests.
 
 ```bash
 git clone --branch develop https://github.com/Rtapy/support-ticket-api.git
@@ -24,338 +14,120 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-```
-
-Edit `.env` and set a unique `DJANGO_SECRET_KEY` and `POSTGRES_PASSWORD`.
-Generate a secret key with:
-
-```bash
 python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
 ```
 
-Quote values containing shell metacharacters with single quotes. `.env` is
-ignored by Git. Compose reads it automatically; Django reads the process
-environment, so export it in each new shell before running Django commands:
+Edit `.env`: set `DJANGO_SECRET_KEY` and `POSTGRES_PASSWORD`, and keep the other
+`POSTGRES_*` values from the example or replace them for your server. Single-quote
+secrets containing shell metacharacters. Local database port: `55439`; change it
+if occupied. `.env` is ignored by Git. Export it in each terminal:
 
 ```bash
 set -a
 source .env
 set +a
 docker compose up -d --wait db
-python manage.py check --database default
 python manage.py migrate
+python manage.py createsuperuser --username admin
 python manage.py runserver
 ```
 
-`DJANGO_DEBUG` defaults to `False`; the example enables it for local development.
-`DJANGO_ALLOWED_HOSTS` is a comma-separated list. Database name, user, password,
-host, port and Django secret key must be provided explicitly.
+Compose runs only PostgreSQL; skip its commands when using an existing server.
+Credentials initialize a new volume only: editing `.env` does not update existing
+PostgreSQL users/passwords. Stop the local database with `docker compose stop db`.
 
-| Variable | Purpose / local value |
+## Users, roles and tokens
+
+At [Django Admin](http://127.0.0.1:8000/admin/), create active users `employee` and
+`support`; add `support` to the migration-created `Support` group.
+
+| Ticket API role | Access |
 | --- | --- |
-| `DJANGO_SECRET_KEY` | Required secret; generate above and quote in `.env` |
-| `DJANGO_DEBUG` | Defaults to `False`; `.env.example` enables local debugging |
-| `DJANGO_ALLOWED_HOSTS` | Comma-separated; defaults to `localhost,127.0.0.1` |
-| `POSTGRES_DB` | Required database name; example `support_ticket_api` |
-| `POSTGRES_USER` | Required database role; example `support_ticket_api` |
-| `POSTGRES_PASSWORD` | Required database password; fill the blank placeholder |
-| `POSTGRES_HOST` | Required; `127.0.0.1` for the local Compose database |
-| `POSTGRES_PORT` | Required; `55439` in the example; change if occupied |
+| Employee | Own tickets/messages/history; create, reply and close own resolved ticket |
+| Support group | All tickets; reply, assign, change status and reopen |
+| Superuser | Same ticket operations as Support |
 
-Compose initializes the database/role/password when its data volume is first
-created. Editing credentials in `.env` does not change an existing PostgreSQL
-role or database; use the matching existing credentials or a separate fresh setup.
+`is_staff` alone does not grant Support access. User/group management uses Django
+Admin's built-in permissions. Ticket/message/history Admin screens are read-only.
 
-## Checks and tests
+In another activated terminal with `.env` exported, provision tokens:
 
-With the environment exported and PostgreSQL healthy:
+```bash
+python manage.py drf_create_token employee
+python manage.py drf_create_token support
+python manage.py drf_create_token admin
+```
+
+Swagger and [OpenAPI schema](http://127.0.0.1:8000/api/schema/) are public. In
+Swagger, click **Authorize** and enter the complete value **`Token <key>`**.
+Django Admin login does not authenticate ticket API requests. Swagger UI assets
+are served locally, without a CDN. Each operation documents its input, response,
+role restrictions, examples and errors.
+
+## Endpoints
+
+Ticket paths require `Authorization: Token <key>`. Base: `/api/`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET, POST | `tickets/` | List visible tickets (`?status=OPEN`) / create for self |
+| GET | `tickets/{id}/` | Detail |
+| GET, POST | `tickets/{id}/messages/` | Messages / reply with optional `new_status` |
+| GET | `tickets/{id}/history/` | Chronological status history |
+| POST | `tickets/{id}/assign/` | Active Support `assignee_id`, or null to unassign |
+| POST | `tickets/{id}/status/` | Normal status transition |
+| POST | `tickets/{id}/close/` | Close a resolved ticket |
+| POST | `tickets/{id}/reopen/` | Reopen to OPEN |
+
+All three lists return `{next, previous, results}` with fixed 20-item cursor pages.
+Follow returned links unchanged. Tickets are newest first; messages/history are
+chronological. Detail and POST responses are single objects. There is no generic
+PUT/PATCH/DELETE, token-login or user-management API.
+
+Normal workflow: `OPEN → IN_PROGRESS | RESOLVED`, `IN_PROGRESS → RESOLVED`,
+`RESOLVED → CLOSED`. Only Support/Admin can Reopen (`RESOLVED | CLOSED → OPEN`).
+Closed tickets reject messages until reopened. Owners can read logically deleted
+tickets/messages; Support/Admin can read all, including `is_deleted`/`deleted_at`.
+Mutations use atomic transactions and ticket row locks; reply/status/history commit
+together. Server-controlled creation fields are ignored if submitted. See
+[DECISIONS.md](docs/DECISIONS.md) for defaults, assumptions and protection limits.
+
+Example: create as Employee, then reply/resolve as Support:
+
+```bash
+EMPLOYEE_TOKEN='<employee-token>'
+SUPPORT_TOKEN='<support-token>'
+curl -X POST http://127.0.0.1:8000/api/tickets/ \
+  -H "Authorization: Token $EMPLOYEE_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"Account access","description":"Cannot sign in","priority":"HIGH"}'
+TICKET_ID=1 # Replace with the returned ID.
+curl -X POST "http://127.0.0.1:8000/api/tickets/$TICKET_ID/messages/" \
+  -H "Authorization: Token $SUPPORT_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"content":"Access restored","new_status":"RESOLVED"}'
+```
+
+To check roles, an Employee requesting another owner's ticket gets `404`; using
+status/assignment/Reopen on their own ticket gets `403`; a missing token gets `401`.
+Use the corresponding role's token in Swagger to try these cases.
+
+## Verify
+
+With PostgreSQL running and the environment exported:
 
 ```bash
 python manage.py check --database default
 python manage.py makemigrations --check --dry-run
 python manage.py test tickets
+python manage.py spectacular --file /tmp/support-ticket-openapi.yaml --validate --fail-on-warn
 ```
 
-The test runner uses the same PostgreSQL server and creates
-`test_<POSTGRES_DB>`. The database role must be allowed to create databases.
-The local Compose database role has that permission. Focused tests cover model
-preservation, roles, token authentication, read-only ticket Admin, ticket API access
-and atomic ticket creation, status workflow, assignment, replies with status changes
-and PostgreSQL row-lock concurrency.
-To run only the tests for a specific API task:
+The database role needs permission to create `test_<POSTGRES_DB>`; the local
+Compose role has it. Tests cover access, workflow, history, rollback, preservation,
+cursor pagination and real PostgreSQL concurrency. Schema tests check all ten
+operations, token security, request fields and paginated/single-object responses.
+Historical evidence: [required delivery](docs/DELIVERY_VERIFICATION.md) and
+[write/concurrency audit](docs/WRITE_CONCURRENCY_AUDIT.md).
+Current Swagger/schema and browser checks: [verification](docs/SWAGGER_VERIFICATION.md).
 
-```bash
-python manage.py test tickets.test_api
-python manage.py test tickets.test_workflow
-python manage.py test tickets.test_assignment
-python manage.py test tickets.test_messages
-python manage.py test tickets.test_concurrency
-python manage.py test tickets.test_pagination
-```
-
-The five concurrency tests use `TransactionTestCase` and independent PostgreSQL
-connections. They observe the waiting `SELECT ... FOR UPDATE` in PostgreSQL before
-allowing the first writer to commit; no lock behavior is mocked. See the
-[write/concurrency audit](docs/WRITE_CONCURRENCY_AUDIT.md) for scenarios and scope.
-
-## Data preservation
-
-`Ticket`, `TicketMessage` and `TicketStatusHistory` reject instance and queryset
-deletion with `ProtectedError`. Ticket/message logical-delete fields are stored
-without filtering records out of the default manager; no delete/restore operation
-is exposed. User and ticket foreign keys use `PROTECT` to preserve references.
-
-Status history rejects updates through `save()`, queryset `update()`,
-`bulk_update()` and conflict-updating `bulk_create()`. New events can be inserted;
-an existing primary key cannot be overwritten by `save()`. These are application
-ORM protections, not database triggers or restrictions on direct SQL access.
-
-The creation service and ticket POST endpoint atomically save the ticket and its
-initial `NULL → OPEN` history event. Creating a `Ticket` directly through the ORM
-does not automatically create history. Status, close and reopen services lock the
-ticket row inside a transaction and check current ownership, role and workflow
-after acquiring the lock. Status, update timestamp and history commit together;
-history-write failures roll back all changes.
-
-Assignment also locks the ticket row before checking access and the target user.
-It changes only the assignee and update timestamp, without changing status or
-adding status history. A failure rolls back the assignment and timestamp.
-
-Posting a message locks the ticket and validates access, closed state and any
-requested status transition before saving. Message, optional status/history and
-ticket update timestamp share one transaction. A rejected request has no side
-effects; a write failure rolls back the whole reply operation.
-
-Logically deleted tickets and their history remain visible under the same access
-rules: owners see their own records and Support/Admin see all records. API responses
-include `is_deleted` and `deleted_at` so clients can control presentation.
-
-## Authentication
-
-DRF defaults to `TokenAuthentication` and `IsAuthenticated`. API requests
-use `Authorization: Token <token>`. Missing/invalid tokens and tokens belonging
-to inactive users are rejected. No token-login or custom user-management API is exposed.
-
-After exporting the environment and running migrations, create an administrator:
-
-```bash
-python manage.py createsuperuser
-```
-
-Log in at `/admin/` to create users and manage group memberships. Migrations create
-the `Support` group without granting permissions or creating users. Its creation
-is idempotent; reversing the migration preserves the group and memberships.
-
-Roles are determined as follows:
-
-- An active superuser is Admin.
-- An active member of the `Support` group is Support.
-- Other active users are Employees; `is_staff` alone does not grant Support access.
-- Inactive and anonymous users do not receive Support/Admin privileges.
-
-For example, create users named `employee`, `other_employee` and `support` in Admin,
-and add only `support` to the `Support` group. All three should be active. They do
-not need staff status to use the API. Generate tokens using DRF's built-in command
-(replace `your_admin_username` with the superuser created above):
-
-```bash
-python manage.py drf_create_token employee
-python manage.py drf_create_token other_employee
-python manage.py drf_create_token support
-python manage.py drf_create_token your_admin_username
-```
-
-The command prints each user's token. User/group management follows the built-in
-Django Admin permissions, with no additional custom role or superuser-only restriction.
-The ticket API still identifies Admin by `is_superuser`, independently of Admin-site
-permissions. Authentication tests also use a test-only probe route that is absent
-from the application URL configuration.
-
-## Implemented ticket API
-
-All routes require a token. User references are represented as numeric IDs.
-
-| Method | Path | Behavior |
-| --- | --- | --- |
-| GET | `/api/tickets/` | Own tickets for Employee; all tickets for Support/Admin |
-| POST | `/api/tickets/` | Create for the authenticated user, with initial history |
-| GET | `/api/tickets/{id}/` | Detail under the same ownership/role rules |
-| GET | `/api/tickets/{id}/history/` | History ordered by `changed_at`, then ID |
-| POST | `/api/tickets/{id}/status/` | Support/Admin: normal status transition |
-| POST | `/api/tickets/{id}/close/` | Owner or Support/Admin: close a resolved ticket |
-| POST | `/api/tickets/{id}/reopen/` | Support/Admin: reopen a resolved/closed ticket |
-| POST | `/api/tickets/{id}/assign/` | Support/Admin: assign to active Support or unassign |
-| GET, POST | `/api/tickets/{id}/messages/` | List messages / reply, optionally with a Support/Admin status change |
-
-Ticket pages are ordered by creation time descending, then ID descending.
-`?status=OPEN` (or `IN_PROGRESS`, `RESOLVED`, `CLOSED`) filters within
-the visible records. An invalid status returns `400`. An Employee requesting
-another user's detail or history receives `404`, including for logically deleted
-tickets. Generic `PUT/PATCH/DELETE` are unavailable.
-
-The three GET lists (tickets, messages and history) use DRF CursorPagination with
-a fixed page size of 20. List responses contain `next`, `previous` and `results`;
-this replaces the previous bare-array contract. An empty list looks like:
-
-```json
-{"next": null, "previous": null, "results": []}
-```
-
-For nonempty pages, `results` holds up to 20 ticket/message/history objects.
-Follow the returned `next` or `previous` URL unchanged; these links carry an opaque
-`cursor` and preserve query parameters such as the ticket status filter. A null
-link means that direction has no further page. There is no total count, page-number
-parameter or client-controlled page size. Each request still enforces ownership
-and role visibility. Detail and POST responses retain their existing shape.
-
-Creation accepts `title` (required, up to 255 characters), `description` (required)
-and `priority` (`LOW`, `MEDIUM`, `HIGH`; default `MEDIUM`). Server-controlled fields
-are read-only and ignored if submitted. New tickets are `OPEN`, unassigned and not
-deleted; creator and initial history actor are the authenticated user. A failed
-history write rolls back ticket creation.
-
-Responses contain `id`, `title`, `description`, `priority`, `status`, `created_by`,
-`assigned_to`, `created_at`, `updated_at`, `is_deleted` and `deleted_at`. History
-events contain `id`, `ticket`, `actor`, `from_status`, `to_status` and `changed_at`.
-
-The status action accepts `{"status":"IN_PROGRESS"}`. Normal transitions are
-`OPEN → IN_PROGRESS | RESOLVED`, `IN_PROGRESS → RESOLVED` and
-`RESOLVED → CLOSED`. Returning to `OPEN` requires the dedicated Reopen action.
-Close and Reopen need no body and always target `CLOSED` and `OPEN` respectively.
-Successful mutations return `200` with the full updated ticket. Invalid or
-unchanged transitions return `400` without changing timestamps or history.
-An Employee can close their own resolved ticket through Close, but cannot use
-the normal status or Reopen actions (`403` on visible tickets). Requests targeting
-another Employee's ticket return `404`. Every real transition appends exactly one
-event with the authenticated actor and previous/new status.
-
-Assignment requires `{"assignee_id":123}` or `{"assignee_id":null}` to unassign.
-The target must be an active member of `Support`; being staff or a superuser alone
-does not make a user an eligible assignee. Support may assign to self or another
-Support member; Admin has the same assignment permissions. Invalid/missing IDs and
-ineligible users return `400` without side effects. Employees receive `403` on their
-own tickets and `404` on others' tickets. A valid request returns `200` with the full
-ticket. Repeating the current assignment is accepted without changing the timestamp.
-
-Message pages are ordered by `created_at`, then ID. Any user
-allowed to read the ticket can read its messages, including when it is closed.
-Responses contain `id`, `ticket`, `author`, `content`, `created_at`, `updated_at`,
-`is_deleted` and `deleted_at`; retained messages are not filtered out by deletion flags.
-
-Post `{"content":"Reply text"}` to add a message. Support/Admin may include
-`"new_status":"RESOLVED"` using the same normal transition rules as the status
-action. Supplying `new_status` as an Employee returns `403`; invalid or unchanged
-transitions return `400` without saving a message. `new_status` is optional but
-cannot be null. Content is required and cannot be blank. Message author, ticket,
-IDs, timestamps and deletion fields are controlled by the server; submitted values
-are ignored. Success returns `201` with the created message. Read the ticket or its
-history to retrieve the resulting status. Plain replies update the ticket timestamp
-without adding a status-history event.
-
-Closed tickets reject messages (`400`) from every role until the dedicated Reopen
-action is used; a reply cannot reopen them. Employees can post only on their own
-nonclosed tickets, while Support/Admin can post on all nonclosed tickets.
-
-With the server running, replace the token placeholders and use the ID returned
-by creation for the detail/history examples:
-
-```bash
-API_BASE=http://127.0.0.1:8000/api
-EMPLOYEE_TOKEN='<employee-token>'
-SUPPORT_TOKEN='<support-token>'
-ADMIN_TOKEN='<superuser-token>'
-OTHER_EMPLOYEE_TOKEN='<other-employee-token>'
-
-curl -i -X POST "$API_BASE/tickets/" \
-  -H "Authorization: Token $EMPLOYEE_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"title":"Account access","description":"Cannot sign in","priority":"HIGH"}'
-
-TICKET_ID=1 # Replace with the ID returned above.
-curl -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/"
-curl -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/?status=OPEN"
-curl -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/$TICKET_ID/"
-curl -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/$TICKET_ID/history/"
-curl -H "Authorization: Token $SUPPORT_TOKEN" "$API_BASE/tickets/"
-curl -H "Authorization: Token $ADMIN_TOKEN" "$API_BASE/tickets/"
-
-curl -X POST "$API_BASE/tickets/$TICKET_ID/status/" \
-  -H "Authorization: Token $SUPPORT_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"status":"IN_PROGRESS"}'
-curl -X POST "$API_BASE/tickets/$TICKET_ID/status/" \
-  -H "Authorization: Token $SUPPORT_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"status":"RESOLVED"}'
-curl -X POST -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/$TICKET_ID/close/"
-curl -X POST -H "Authorization: Token $SUPPORT_TOKEN" "$API_BASE/tickets/$TICKET_ID/reopen/"
-
-SUPPORT_USER_ID=2 # Replace with an active Support member's ID from Django Admin.
-curl -X POST "$API_BASE/tickets/$TICKET_ID/assign/" \
-  -H "Authorization: Token $SUPPORT_TOKEN" \
-  -H 'Content-Type: application/json' -d "{\"assignee_id\":$SUPPORT_USER_ID}"
-curl -X POST "$API_BASE/tickets/$TICKET_ID/assign/" \
-  -H "Authorization: Token $ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"assignee_id":null}'
-
-curl -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/$TICKET_ID/messages/"
-curl -X POST "$API_BASE/tickets/$TICKET_ID/messages/" \
-  -H "Authorization: Token $EMPLOYEE_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"content":"Additional details"}'
-curl -X POST "$API_BASE/tickets/$TICKET_ID/messages/" \
-  -H "Authorization: Token $SUPPORT_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"content":"Access restored","new_status":"RESOLVED"}'
-```
-
-To check role isolation, create a second ticket using `OTHER_EMPLOYEE_TOKEN`, note
-its returned ID as `OTHER_TICKET_ID`, then run the following. The first request
-returns `403`, the second returns `404`, and the last returns `401`:
-
-```bash
-curl -i -X POST "$API_BASE/tickets/" \
-  -H "Authorization: Token $OTHER_EMPLOYEE_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"title":"Another account","description":"Other employee request"}'
-OTHER_TICKET_ID=2 # Replace with the other employee's ticket ID.
-curl -i -X POST "$API_BASE/tickets/$TICKET_ID/status/" \
-  -H "Authorization: Token $EMPLOYEE_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"status":"CLOSED"}'
-curl -i -H "Authorization: Token $EMPLOYEE_TOKEN" "$API_BASE/tickets/$OTHER_TICKET_ID/"
-curl -i "$API_BASE/tickets/"
-```
-
-## Django Admin
-
-User and group management use the built-in Django Admin. Ticket, message and
-status-history screens are read-only, including for superusers: add, change,
-delete and bulk actions are disabled. Ticket creation, status, assignment and
-message mutations use transactional service/API paths instead of editable Admin forms.
-
-Viewing ticket records in Admin requires both the Support/Admin role and Django's
-normal model view/change permissions. Django Admin also requires an active staff
-account. Superusers have these permissions; a Support user needs `is_staff` and
-explicit model view permissions if Admin access is desired. Group membership alone
-does not grant staff status or Django model permissions. Staff Employees cannot
-view ticket Admin records, even if given model view permissions.
-
-## Stop the local database
-
-```bash
-docker compose stop db
-```
-
-The database persists in a Docker volume across container restarts.
-
-## Delivery evidence and optional work
-
-The [delivery verification](docs/DELIVERY_VERIFICATION.md) records the required
-delivery before optional pagination: fresh setup, full PostgreSQL test run, real
-local HTTP checks and requirement-to-test mapping. It distinguishes automated
-test-client checks, real database races and HTTP checks.
-
-Cursor pagination is now implemented for all three GET lists. The pagination change
-was verified with `tickets.test_pagination`, `tickets.test_api` and
-`tickets.test_messages`: 18 tests passed on PostgreSQL. It does not claim a new
-full-suite or live-HTTP run for the changed response contract.
-
-Other optional assignment features are not implemented: title/ID search, advanced
-filters and Swagger/OpenAPI. The ticket list supports only the documented status
-filter. These features require a separate agreed task. Frontend, deployment,
+Search and advanced filters are not implemented. Frontend, deployment,
 notifications, attachments, SLA and advanced reporting remain outside scope.

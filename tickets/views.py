@@ -9,10 +9,12 @@ from rest_framework.response import Response
 from .models import Ticket
 from .pagination import HistoryCursorPagination, MessageCursorPagination, TicketCursorPagination
 from .roles import is_support_or_admin
+from .schema import ticket_schema
 from .serializers import TicketMessageSerializer, TicketSerializer, TicketStatusHistorySerializer
 from .services import assign_ticket, change_ticket_status, close_ticket, post_message, reopen_ticket
 
 
+@ticket_schema
 class TicketViewSet(
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
@@ -20,6 +22,7 @@ class TicketViewSet(
     viewsets.GenericViewSet,
 ):
     serializer_class = TicketSerializer
+    queryset = Ticket.objects.none()  # Schema introspection must not evaluate a user's queryset.
     pagination_class = TicketCursorPagination
 
     def get_queryset(self):

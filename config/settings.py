@@ -50,6 +50,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework.authtoken',
+    'drf_spectacular',
+    'drf_spectacular_sidecar',
     'tickets.apps.TicketsConfig',
 ]
 
@@ -98,12 +100,40 @@ DATABASES = {
 }
 
 REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.TokenAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Support Ticket API',
+    'DESCRIPTION': (
+        'Employee: own tickets. Support and Admin: all tickets. '
+        'Admin in the ticket API means is_superuser; is_staff alone does not grant Support access. '
+        'Use Authorize with the full value Token <key>. Tokens are provisioned with '
+        'manage.py drf_create_token; Django Admin login does not authenticate API requests. '
+        'The three GET lists use fixed 20-item cursor pages. Follow next/previous links unchanged. '
+        'Logically deleted records remain visible under the same role and ownership rules. '
+        'Server-controlled creation fields are ignored if submitted. '
+        'Invalid operations roll back without partial messages, status changes or history.'
+    ),
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SERVE_PUBLIC': True,
+    'SERVE_PERMISSIONS': ['rest_framework.permissions.AllowAny'],
+    'SERVE_AUTHENTICATION': [],
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SWAGGER_UI_DIST': 'SIDECAR',
+    'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
+    'SWAGGER_UI_SETTINGS': {'deepLinking': True, 'tryItOutEnabled': True},
+    'ENUM_NAME_OVERRIDES': {
+        'TicketStatusEnum': 'tickets.models.Ticket.Status',
+        'TicketPriorityEnum': 'tickets.models.Ticket.Priority',
+    },
 }
 
 
