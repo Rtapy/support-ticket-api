@@ -1,10 +1,10 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
-from rest_framework.fields import IntegerField, empty
+from rest_framework.fields import CharField, IntegerField, empty
 from rest_framework.generics import get_object_or_404
 
-from .models import Ticket, TicketStatusHistory
+from .models import Ticket, TicketMessage, TicketStatusHistory
 from .roles import is_support, is_support_or_admin
 
 
@@ -58,11 +58,15 @@ def _record_status_change(*, ticket, actor, new_status):
     return ticket
 
 
+def _validate_status_transition(*, ticket, new_status, field='status'):
+    if new_status not in NORMAL_TRANSITIONS.get(ticket.status, ()):
+        raise ValidationError({field: 'This status transition is not allowed.'})
+
+
 @transaction.atomic
 def change_ticket_status(*, ticket_id, actor, new_status):
     ticket = _get_locked_ticket(ticket_id=ticket_id, actor=actor, support_only=True)
-    if new_status not in NORMAL_TRANSITIONS.get(ticket.status, ()):
-        raise ValidationError({'status': 'This status transition is not allowed.'})
+    _validate_status_transition(ticket=ticket, new_status=new_status)
     return _record_status_change(ticket=ticket, actor=actor, new_status=new_status)
 
 
@@ -97,3 +101,24 @@ def assign_ticket(*, ticket_id, actor, assignee_id=empty):
         ticket.assigned_to_id = assignee_id
         ticket.save(update_fields=['assigned_to', 'updated_at'])
     return ticket
+
+
+@transaction.atomic
+def post_message(*, ticket_id, actor, content=empty, new_status=empty):
+    ticket = _get_locked_ticket(ticket_id=ticket_id, actor=actor, support_only=False)
+    if new_status is not empty and not is_support_or_admin(actor):
+        raise PermissionDenied('Only Support or Admin may change status with a reply.')
+    if ticket.status == Ticket.Status.CLOSED:
+        raise ValidationError({'content': 'Reopen a closed ticket before posting messages.'})
+    try:
+        content = CharField().run_validation(content)
+    except ValidationError as exc:
+        raise ValidationError({'content': exc.detail}) from exc
+    if new_status is not empty:
+        _validate_status_transition(ticket=ticket, new_status=new_status, field='new_status')
+    message = TicketMessage.objects.create(ticket=ticket, author=actor, content=content)
+    if new_status is not empty:
+        _record_status_change(ticket=ticket, actor=actor, new_status=new_status)
+    else:
+        ticket.save(update_fields=['updated_at'])
+    return message
