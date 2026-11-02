@@ -19,6 +19,8 @@
 
 Users and roles use Django's built-in User, Groups and Admin. Server-controlled fields (`created_by`, `author`, initial `status`, `assigned_to` and timestamps) cannot be set by ticket creators.
 
+User/group management follows Django Admin's built-in permissions; no additional custom Admin role or superuser-only management restriction is introduced. The ticket API identifies Admin by `is_superuser`, independently of Admin-site permissions.
+
 ## Authorization and workflow
 
 | Operation | Employee | Support / Admin |
@@ -48,6 +50,8 @@ All paths require authentication; base prefix: `/api/`.
 | `GET` | `tickets/{id}/history/` | Chronological status history |
 
 Do not expose generic `PUT/PATCH/DELETE` or custom user-management REST routes. An employee requesting another employee's ticket by ID receives `404`; an authenticated user attempting a forbidden operation on a visible ticket receives `403`.
+
+Logically deleted tickets remain visible under the same ownership/role rules, including their history. Ticket responses include `is_deleted` and `deleted_at`; clients decide how to display them.
 
 ## Consistency and concurrency
 
