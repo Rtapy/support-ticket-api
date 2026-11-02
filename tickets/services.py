@@ -1,6 +1,17 @@
 from django.db import transaction
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from rest_framework.generics import get_object_or_404
 
 from .models import Ticket, TicketStatusHistory
+from .roles import is_support_or_admin
+
+
+NORMAL_TRANSITIONS = {
+    Ticket.Status.OPEN: (Ticket.Status.IN_PROGRESS, Ticket.Status.RESOLVED),
+    Ticket.Status.IN_PROGRESS: (Ticket.Status.RESOLVED,),
+    Ticket.Status.RESOLVED: (Ticket.Status.CLOSED,),
+    Ticket.Status.CLOSED: (),
+}
 
 
 @transaction.atomic
@@ -20,3 +31,50 @@ def create_ticket(*, created_by, title, description, priority=Ticket.Priority.ME
         to_status=Ticket.Status.OPEN,
     )
     return ticket
+
+
+def _get_locked_ticket(*, ticket_id, actor, support_only):
+    # Call only inside an atomic service; authorization uses the locked row.
+    ticket = get_object_or_404(Ticket.objects.select_for_update(), pk=ticket_id)
+    if not actor.is_authenticated or not actor.is_active:
+        raise PermissionDenied('An active authenticated user is required.')
+    privileged = is_support_or_admin(actor)
+    if not privileged and ticket.created_by_id != actor.pk:
+        raise NotFound()
+    if support_only and not privileged:
+        raise PermissionDenied('Support or Admin access is required.')
+    return ticket
+
+
+def _record_status_change(*, ticket, actor, new_status):
+    previous_status = ticket.status
+    ticket.status = new_status
+    ticket.save(update_fields=['status', 'updated_at'])
+    TicketStatusHistory.objects.create(
+        ticket=ticket, actor=actor, from_status=previous_status, to_status=new_status,
+    )
+    return ticket
+
+
+@transaction.atomic
+def change_ticket_status(*, ticket_id, actor, new_status):
+    ticket = _get_locked_ticket(ticket_id=ticket_id, actor=actor, support_only=True)
+    if new_status not in NORMAL_TRANSITIONS.get(ticket.status, ()):
+        raise ValidationError({'status': 'This status transition is not allowed.'})
+    return _record_status_change(ticket=ticket, actor=actor, new_status=new_status)
+
+
+@transaction.atomic
+def close_ticket(*, ticket_id, actor):
+    ticket = _get_locked_ticket(ticket_id=ticket_id, actor=actor, support_only=False)
+    if ticket.status != Ticket.Status.RESOLVED:
+        raise ValidationError({'status': 'Only a resolved ticket can be closed.'})
+    return _record_status_change(ticket=ticket, actor=actor, new_status=Ticket.Status.CLOSED)
+
+
+@transaction.atomic
+def reopen_ticket(*, ticket_id, actor):
+    ticket = _get_locked_ticket(ticket_id=ticket_id, actor=actor, support_only=True)
+    if ticket.status not in (Ticket.Status.RESOLVED, Ticket.Status.CLOSED):
+        raise ValidationError({'status': 'Only a resolved or closed ticket can be reopened.'})
+    return _record_status_change(ticket=ticket, actor=actor, new_status=Ticket.Status.OPEN)
