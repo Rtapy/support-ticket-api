@@ -36,7 +36,9 @@ Transitions: `OPEN → IN_PROGRESS | RESOLVED`; `IN_PROGRESS → RESOLVED`; `RES
 
 ## REST API
 
-All paths require authentication; base prefix: `/api/`.
+All ticket API paths require authentication; base prefix: `/api/`. The separately
+approved documentation endpoints `/api/docs/` (Swagger UI) and `/api/schema/`
+(OpenAPI) are public; executing ticket requests from Swagger still requires a token.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -86,4 +88,4 @@ Write only focused tests that prove these essential behaviors (avoid exhaustive/
 - Root `README.md`: setup, environment, migration/run/test commands, endpoint list, authentication and role-testing examples.
 - `docs/DECISIONS.md`: important architectural/product assumptions and limitations.
 
-**Out of scope:** frontend, deployments, notifications, attachments, SLA, advanced reporting, advanced filters/search and Swagger/OpenAPI unless separately approved. Cursor pagination is the separately approved optional feature implemented for the three GET lists.
+**Out of scope:** frontend, deployments, notifications, attachments, SLA, advanced reporting and advanced filters/search unless separately approved. Cursor pagination for the three GET lists and Swagger/OpenAPI documentation are separately approved optional features.
