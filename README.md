@@ -1,7 +1,7 @@
 # Support Ticket API
 
-Django/DRF backend for a support ticket system. This branch provides the project
-foundation; ticket models and API endpoints will be added in subsequent tasks.
+Django/DRF backend for a support ticket system. The project foundation and ticket
+models are implemented; roles, mutation services and API endpoints are subsequent tasks.
 Requirements and business decisions live in
 [the definition](docs/SUPPORT_TICKET_DISCOVERY_DEFINE.md) and
 [DECISIONS.md](docs/DECISIONS.md).
@@ -52,13 +52,29 @@ With the environment exported and PostgreSQL healthy:
 ```bash
 python manage.py check --database default
 python manage.py makemigrations --check --dry-run
-python manage.py test
+python manage.py test tickets
 ```
 
 The test runner uses the same PostgreSQL server and creates
 `test_<POSTGRES_DB>`. The database role must be allowed to create databases.
-The local Compose database role has that permission. There are no application
-tests yet in the foundation task.
+The local Compose database role has that permission. The focused model tests cover
+defaults/audit fields, record preservation, protected user references and append-only history.
+
+## Data preservation
+
+`Ticket`, `TicketMessage` and `TicketStatusHistory` reject instance and queryset
+deletion with `ProtectedError`. Ticket/message logical-delete fields are stored
+without filtering records out of the default manager; no delete/restore operation
+is exposed. User and ticket foreign keys use `PROTECT` to preserve references.
+
+Status history rejects updates through `save()`, queryset `update()`,
+`bulk_update()` and conflict-updating `bulk_create()`. New events can be inserted;
+an existing primary key cannot be overwritten by `save()`. These are application
+ORM protections, not database triggers or restrictions on direct SQL access.
+
+The initial status-history event and workflow rules will be enforced by the
+transactional service layer in subsequent tasks. Creating a `Ticket` directly
+through the ORM does not automatically create a history event.
 
 ## Authentication
 
