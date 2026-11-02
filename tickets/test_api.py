@@ -76,7 +76,7 @@ class TicketReadCreateTests(TestCase):
             with self.subTest(user=user.username):
                 response = client.get(reverse('ticket-list'))
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual({item['id'] for item in response.data}, {ticket.pk for ticket in visible})
+                self.assertEqual({item['id'] for item in response.data['results']}, {ticket.pk for ticket in visible})
                 for ticket in visible:
                     detail = client.get(reverse('ticket-detail', args=[ticket.pk]))
                     self.assertEqual(detail.status_code, 200)
@@ -85,8 +85,8 @@ class TicketReadCreateTests(TestCase):
                         self.assertIsNotNone(detail.data['deleted_at'])
                     history = client.get(reverse('ticket-history', args=[ticket.pk]))
                     self.assertEqual(history.status_code, 200)
-                    self.assertTrue(history.data)
-                    self.assertTrue(all(event['ticket'] == ticket.pk for event in history.data))
+                    self.assertTrue(history.data['results'])
+                    self.assertTrue(all(event['ticket'] == ticket.pk for event in history.data['results']))
                 for ticket in hidden:
                     for route in ('ticket-detail', 'ticket-history'):
                         self.assertEqual(client.get(reverse(route, args=[ticket.pk])).status_code, 404)
@@ -98,7 +98,7 @@ class TicketReadCreateTests(TestCase):
             with self.subTest(user=user.username):
                 response = client.get(reverse('ticket-list'))
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual({item['id'] for item in response.data}, {ticket.pk for ticket in all_tickets})
+                self.assertEqual({item['id'] for item in response.data['results']}, {ticket.pk for ticket in all_tickets})
                 for ticket in all_tickets:
                     detail = client.get(reverse('ticket-detail', args=[ticket.pk]))
                     self.assertEqual(detail.status_code, 200)
@@ -110,10 +110,10 @@ class TicketReadCreateTests(TestCase):
         for status, ticket in ((Ticket.Status.OPEN, self.own_ticket), (Ticket.Status.RESOLVED, self.own_deleted)):
             response = client.get(reverse('ticket-list'), {'status': status})
             self.assertEqual(response.status_code, 200)
-            self.assertEqual([item['id'] for item in response.data], [ticket.pk])
+            self.assertEqual([item['id'] for item in response.data['results']], [ticket.pk])
         client = self.client_for(self.support)
         response = client.get(reverse('ticket-list'), {'status': Ticket.Status.RESOLVED})
-        self.assertEqual({item['id'] for item in response.data}, {self.own_deleted.pk, self.other_deleted.pk})
+        self.assertEqual({item['id'] for item in response.data['results']}, {self.own_deleted.pk, self.other_deleted.pk})
         response = client.get(reverse('ticket-list'), {'status': 'INVALID'})
         self.assertEqual(response.status_code, 400)
         self.assertIn('status', response.data)
@@ -196,10 +196,10 @@ class TicketReadCreateTests(TestCase):
         response = self.client_for(self.employee).get(reverse('ticket-history', args=[ticket.pk]))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            [event['to_status'] for event in response.data],
+            [event['to_status'] for event in response.data['results']],
             [Ticket.Status.OPEN, Ticket.Status.IN_PROGRESS, Ticket.Status.RESOLVED],
         )
-        timestamps = [event['changed_at'] for event in response.data]
+        timestamps = [event['changed_at'] for event in response.data['results']]
         self.assertEqual(timestamps, sorted(timestamps))
 
     def test_generic_mutation_methods_are_not_exposed(self):
